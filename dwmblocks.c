@@ -2,6 +2,8 @@
 #include<stdio.h>
 #include<string.h>
 #include<unistd.h>
+#include <time.h>
+#include <errno.h>
 #include<signal.h>
 #include<sys/wait.h>
 #ifndef NO_X
@@ -56,6 +58,57 @@ static char statusstr[2][STATUSLENGTH];
 static int statusContinue = 1;
 static int returnStatus = 0;
 
+void remove_all(char *str, char to_remove) {
+	char *read = str;
+	char *write = str;
+	while (*read) {
+		if (*read != to_remove) {
+			*write++ = *read;
+		}
+		++read;
+	}
+	*write = '\0';
+}
+
+int gcd(int a, int b)
+{
+	int temp;
+	while (b > 0){
+		temp = a % b;
+
+		a = b;
+		b = temp;
+	}
+	return a;
+}
+
+////opens process *cmd and stores output in *output
+//void getcmd(const Block *block, char *output)
+//{
+//	if (block->signal)
+//		*output++ = block->signal;
+//	strcpy(output, block->icon);
+//	FILE *cmdf = popen(block->command, "r");
+//	if (!cmdf)
+//		return;
+//	int i = strlen(block->icon);
+//	fgets(output+i, CMDLENGTH-i-delimLen, cmdf);
+//	i = strlen(output);
+//	if (i == 0) {
+//		//return if block and command output are both empty
+//		pclose(cmdf);
+//		return;
+//	}
+//	if (delim[0] != '\0') {
+//		//only chop off newline if one is present at the end
+//		i = output[i-1] == '\n' ? i-1 : i;
+//		strncpy(output+i, delim, delimLen); 
+//	}
+//	else
+//		output[i++] = '\0';
+//	pclose(cmdf);
+//}
+
 //opens process *cmd and stores output in *output
 void getcmd(const Block *block, char *output)
 {
@@ -65,31 +118,44 @@ void getcmd(const Block *block, char *output)
 	FILE *cmdf = popen(block->command, "r");
 	if (!cmdf)
 		return;
-	int i = strlen(block->icon);
-	fgets(output+i, CMDLENGTH-i-delimLen, cmdf);
-	i = strlen(output);
-	if (i == 0) {
-		//return if block and command output are both empty
-		pclose(cmdf);
-		return;
-	}
-	if (delim[0] != '\0') {
-		//only chop off newline if one is present at the end
-		i = output[i-1] == '\n' ? i-1 : i;
-		strncpy(output+i, delim, delimLen); 
-	}
-	else
-		output[i++] = '\0';
+    char tmpstr[CMDLENGTH] = "";
+    // TODO decide whether its better to use the last value till next time or just keep trying while the error was the interrupt
+    // this keeps trying to read if it got nothing and the error was an interrupt
+    //  could also just read to a separate buffer and not move the data over if interrupted
+    //  this way will take longer trying to complete 1 thing but will get it done
+    //  the other way will move on to keep going with everything and the part that failed to read will be wrong till its updated again
+    // either way you have to save the data to a temp buffer because when it fails it writes nothing and then then it gets displayed before this finishes
+	char * s;
+    int e;
+    do {
+        errno = 0;
+        s = fgets(tmpstr, CMDLENGTH-(strlen(delim)+1), cmdf);
+        e = errno;
+    } while (!s && e == EINTR);
 	pclose(cmdf);
+
+	int i = strlen(block->icon);
+    
+    strcpy(output, block->icon);
+    strcpy(output+i, tmpstr);
+	remove_all(output, '\n');
+	i = strlen(output);
+    if ((i > 0 && block != &blocks[LENGTH(blocks) - 1])){
+        strcat(output, delim);
+    }
+    i+=strlen(delim);
+	output[i++] = '\0';
 }
+
 
 void getcmds(int time)
 {
 	const Block* current;
 	for (unsigned int i = 0; i < LENGTH(blocks); i++) {
 		current = blocks + i;
-		if ((current->interval != 0 && time % current->interval == 0) || time == -1)
+    	if ((current->interval != 0 && time % current->interval == 0) || time == -1){
 			getcmd(current,statusbar[i]);
+        }
 	}
 }
 
@@ -98,8 +164,9 @@ void getsigcmds(unsigned int signal)
 	const Block *current;
 	for (unsigned int i = 0; i < LENGTH(blocks); i++) {
 		current = blocks + i;
-		if (current->signal == signal)
+    	if (current->signal == signal){
 			getcmd(current,statusbar[i]);
+        }
 	}
 }
 
@@ -162,19 +229,55 @@ void pstdout()
 }
 
 
+//void statusloop()
+//{
+//	setupsignals();
+//	int i = 0;
+//	getcmds(-1);
+//	while (1) {
+//		getcmds(i++);
+//		writestatus();
+//		if (!statusContinue)
+//			break;
+//		sleep(1.0);
+//	}
+//}
+
 void statusloop()
 {
 	setupsignals();
-	int i = 0;
+
+    // first figure out the default wait interval by finding the
+    // greatest common denominator of the intervals
+    unsigned int interval = -1;
+    for(int i = 0; i < LENGTH(blocks); i++){
+        if(blocks[i].interval){
+            interval = gcd(blocks[i].interval, interval);
+        }
+    }
+	unsigned int i = 0;
+    int interrupted = 0;
+    const struct timespec sleeptime = {interval, 0};
+    struct timespec tosleep = sleeptime;
 	getcmds(-1);
-	while (1) {
-		getcmds(i++);
-		writestatus();
-		if (!statusContinue)
-			break;
-		sleep(1.0);
+	while(statusContinue)
+	{
+        // sleep for tosleep (should be a sleeptime of interval seconds) and put what was left if interrupted back into tosleep
+        interrupted = nanosleep(&tosleep, &tosleep);
+        // if interrupted then just go sleep again for the remaining time
+        if(interrupted == -1){
+            continue;
+        }
+        // if not interrupted then do the calling and writing
+        getcmds(i);
+        writestatus();
+        // then increment since its actually been a second (plus the time it took the commands to run)
+        i += interval;
+        // set the time to sleep back to the sleeptime of 1s
+        tosleep = sleeptime;
 	}
 }
+
 
 #ifndef __OpenBSD__
 /* this signal handler should do nothing */
