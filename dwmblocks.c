@@ -63,7 +63,8 @@ void remove_all(char *str, char to_remove) {
 	char *write = str;
 	while (*read) {
 		if (*read != to_remove) {
-			*write++ = *read;
+			*write = *read;
+			++write;
 		}
 		++read;
 	}
@@ -82,7 +83,7 @@ int gcd(int a, int b)
 	return a;
 }
 
-////opens process *cmd and stores output in *output
+//opens process *cmd and stores output in *output
 //void getcmd(const Block *block, char *output)
 //{
 //	if (block->signal)
@@ -91,6 +92,7 @@ int gcd(int a, int b)
 //	FILE *cmdf = popen(block->command, "r");
 //	if (!cmdf)
 //		return;
+//
 //	int i = strlen(block->icon);
 //	fgets(output+i, CMDLENGTH-i-delimLen, cmdf);
 //	i = strlen(output);
@@ -114,7 +116,6 @@ void getcmd(const Block *block, char *output)
 {
 	if (block->signal)
 		*output++ = block->signal;
-	strcpy(output, block->icon);
 	FILE *cmdf = popen(block->command, "r");
 	if (!cmdf)
 		return;
@@ -127,26 +128,28 @@ void getcmd(const Block *block, char *output)
     // either way you have to save the data to a temp buffer because when it fails it writes nothing and then then it gets displayed before this finishes
 	char * s;
     int e;
+	int i = strlen(block->icon);
     do {
         errno = 0;
-        s = fgets(tmpstr, CMDLENGTH-(strlen(delim)+1), cmdf);
+        //s = fgets(tmpstr, CMDLENGTH-(strlen(delim)+1), cmdf);
+	    s = fgets(tmpstr, CMDLENGTH-i-delimLen, cmdf);
         e = errno;
     } while (!s && e == EINTR);
-	pclose(cmdf);
 
-	int i = strlen(block->icon);
-    
+	i = strlen(block->icon);
+	//int i = strlen(block->icon);
     strcpy(output, block->icon);
     strcpy(output+i, tmpstr);
 	remove_all(output, '\n');
 	i = strlen(output);
-    if ((i > 0 && block != &blocks[LENGTH(blocks) - 1])){
+    if (i > 0 && block != &blocks[LENGTH(blocks) - 1]){
         strcat(output, delim);
     }
+    //strcat(output, delim);
     i+=strlen(delim);
 	output[i++] = '\0';
+	pclose(cmdf);
 }
-
 
 void getcmds(int time)
 {
@@ -192,9 +195,13 @@ int getstatus(char *str, char *last)
 {
 	strcpy(last, str);
 	str[0] = '\0';
-	for (unsigned int i = 0; i < LENGTH(blocks); i++)
+	for (unsigned int i = 0; i < LENGTH(blocks); i++){
 		strcat(str, statusbar[i]);
-	str[strlen(str)-strlen(delim)] = '\0';
+        if (i == LENGTH(blocks) - 1)
+            strcat(str, " ");
+    }
+	//str[strlen(str)-strlen(delim)] = '\0';
+	str[strlen(str)-1] = '\0';
 	return strcmp(str, last);//0 if they are the same
 }
 
